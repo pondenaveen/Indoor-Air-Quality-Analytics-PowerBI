@@ -1,0 +1,533 @@
+CREATE DATABASE IOT_ANALYTICS_DB;
+show databases;
+use iot_analytics_db;
+create schema raw;
+create schema CURATED;
+create schema ANALYTICS;
+
+SHOW SCHEMAS;
+
+use schema analytics;
+
+create table dim_company(
+company_id int autoincrement,
+company_name string,
+industry STRING,
+region STRING,
+created_at TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
+primary key(company_id));
+
+
+
+CREATE or replace TABLE DIM_BUILDING (
+    building_id INT AUTOINCREMENT,
+    company_id INT,
+    building_name STRING,
+    city STRING,
+    address STRING,
+    created_at TIMESTAMP_NTZ(9) DEFAULT CONVERT_TIMEZONE('UTC','Asia/Kolkata',CURRENT_TIMESTAMP()),
+    PRIMARY KEY (building_id)
+);
+
+
+CREATE or replace TABLE DIM_FLOOR (
+    floor_id INT AUTOINCREMENT,
+    building_id INT,
+    floor_number INT,
+    floor_name string,
+    created_at TIMESTAMP_NTZ(9) DEFAULT CONVERT_TIMEZONE('UTC','Asia/Kolkata',CURRENT_TIMESTAMP()),
+    PRIMARY KEY (floor_id)
+);
+
+
+CREATE or replace TABLE DIM_ZONE (
+    zone_id INT AUTOINCREMENT,
+    floor_id INT,
+    zone_name STRING,
+    created_at TIMESTAMP_NTZ(9) DEFAULT CONVERT_TIMEZONE('UTC','Asia/Kolkata',CURRENT_TIMESTAMP()),
+    PRIMARY KEY (zone_id)
+);
+
+
+CREATE or replace TABLE DIM_SPACE (
+    space_id INT AUTOINCREMENT,
+    zone_id INT,
+    space_name STRING,
+    space_type STRING,
+    capacity INT,
+    created_at TIMESTAMP_NTZ(9) DEFAULT CONVERT_TIMEZONE('UTC','Asia/Kolkata',CURRENT_TIMESTAMP()),
+    PRIMARY KEY (space_id)
+);
+
+
+CREATE or replace TABLE DIM_SENSOR (
+    sensor_id INT AUTOINCREMENT,
+    space_id INT,
+    sensor_type STRING,
+    manufacturer STRING,
+    installed_date DATE,
+    status STRING,
+    created_at TIMESTAMP_NTZ(9) DEFAULT CONVERT_TIMEZONE('UTC','Asia/Kolkata',CURRENT_TIMESTAMP()),
+    PRIMARY KEY (sensor_id)
+);
+
+use schema Raw;
+
+CREATE or replace TABLE SENSOR_EVENTS_RAW (
+    event_id BIGINT AUTOINCREMENT,
+    sensor_id INT,
+    event_timestamp TIMESTAMP_NTZ,
+    payload VARIANT,                     -- JSON payload
+    ingestion_time TIMESTAMP_NTZ(9) DEFAULT CONVERT_TIMEZONE('UTC','Asia/Kolkata',CURRENT_TIMESTAMP()),
+    PRIMARY KEY (event_id)
+);
+
+
+CREATE or replace TABLE SENSOR_READINGS_CURATED (
+    reading_id BIGINT AUTOINCREMENT,
+    sensor_id INT,
+    reading_timestamp TIMESTAMP_NTZ,
+
+    metric_name STRING,      -- temperature, humidity, co, tvoc, pm10
+    metric_value FLOAT,
+    unit STRING,             -- °C, %, ppm, µg/m³, etc.
+
+    quality_flag STRING,     -- OK, MISSING, OUTLIER
+    curated_time TIMESTAMP_NTZ(9) DEFAULT CONVERT_TIMEZONE('UTC','Asia/Kolkata',CURRENT_TIMESTAMP()),
+
+    PRIMARY KEY (reading_id)
+);
+
+
+
+create or replace stream sensor_event_stream
+on table sensor_events_raw
+SHOW_INITIAL_ROWS = FALSE;
+
+
+
+CREATE OR REPLACE TASK CURATE_ALL_KPIS_TASK
+WAREHOUSE = COMPUTE_WH
+SCHEDULE = 'USING CRON 0,5,10,15,20,25,30,35,40,45,50,55 * * * * UTC'  -- runs every minute, adjust as needed
+AS
+-- Insert all KPIs into CURATED table
+INSERT INTO CURATED.SENSOR_READINGS_CURATED(sensor_id, reading_timestamp, metric_name, metric_value, unit, quality_flag)
+SELECT sensor_id, event_timestamp, 'temperature' AS metric_name,
+       payload:temperature::FLOAT AS metric_value,
+       '°C' AS unit,
+       CASE WHEN payload:temperature::FLOAT BETWEEN 0 AND 50 THEN 'OK' ELSE 'OUTLIER' END AS quality_flag
+FROM RAW.SENSOR_EVENTS_STREAM
+UNION ALL
+SELECT sensor_id, event_timestamp, 'humidity' AS metric_name,
+       payload:humidity::FLOAT AS metric_value,
+       '%' AS unit,
+       CASE WHEN payload:humidity::FLOAT BETWEEN 0 AND 100 THEN 'OK' ELSE 'OUTLIER' END
+FROM RAW.SENSOR_EVENTS_STREAM
+UNION ALL
+SELECT sensor_id, event_timestamp, 'CO' AS metric_name,
+       payload:co::FLOAT AS metric_value,
+       'ppm' AS unit,
+       CASE WHEN payload:co::FLOAT BETWEEN 0 AND 10 THEN 'OK' ELSE 'OUTLIER' END
+FROM RAW.SENSOR_EVENTS_STREAM
+UNION ALL
+SELECT sensor_id, event_timestamp, 'TVOC' AS metric_name,
+       payload:tvoc::FLOAT AS metric_value,
+       'ppb' AS unit,
+       CASE WHEN payload:tvoc::FLOAT BETWEEN 0 AND 500 THEN 'OK' ELSE 'OUTLIER' END
+FROM RAW.SENSOR_EVENTS_STREAM
+UNION ALL
+SELECT sensor_id, event_timestamp, 'PM10' AS metric_name,
+       payload:pm10::FLOAT AS metric_value,
+       'µg/m³' AS unit,
+       CASE WHEN payload:pm10::FLOAT BETWEEN 0 AND 200 THEN 'OK' ELSE 'OUTLIER' END
+FROM RAW.SENSOR_EVENTS_STREAM
+UNION ALL
+SELECT sensor_id, event_timestamp, 'AQI' AS metric_name,
+       payload:aqi::FLOAT AS metric_value,
+       'AQI' AS unit,
+       CASE WHEN payload:aqi::FLOAT BETWEEN 0 AND 500 THEN 'OK' ELSE 'OUTLIER' END
+FROM RAW.SENSOR_EVENTS_STREAM
+UNION ALL
+SELECT sensor_id, event_timestamp, 'Odor' AS metric_name,
+       payload:odor::FLOAT AS metric_value,
+       'OU' AS unit,
+       CASE WHEN payload:odor::FLOAT BETWEEN 0 AND 10 THEN 'OK' ELSE 'OUTLIER' END
+FROM RAW.SENSOR_EVENTS_STREAM;
+
+
+
+ALTER TASK CURATE_ALL_KPIS_TASK RESUME;
+
+
+INSERT INTO DIM_COMPANY (COMPANY_NAME, INDUSTRY, REGION)
+VALUES ('ABC Corp', 'IT Services', 'North America');
+
+select * from dim_company;
+delete from dim_company where company_name = 'ABC Corp';
+
+
+INSERT INTO ANALYTICS.DIM_BUILDING (COMPANY_ID, BUILDING_NAME, CITY, ADDRESS)
+VALUES 
+(1, 'The Pinnacle', 'Mumbai', '123 Corporate Ave, Mumbai'),
+(1, 'Cityscape', 'Mumbai', '456 Business Park, Mumbai');
+
+select * from dim_building;
+
+INSERT INTO ANALYTICS.DIM_FLOOR (BUILDING_ID, FLOOR_NUMBER, FLOOR_NAME)
+VALUES 
+-- Building A
+(1, 1, 'GF-The Pinnacle'),
+(1, 2, 'FF-The Pinnacle'),
+
+-- Building B
+(2, 1, 'GF-Cityscape'),
+(2, 2, 'FF-Cityscape');
+
+select * from dim_floor;
+
+
+-- Floor 1: GF-The Pinnacle (FLOOR_ID = 1)
+INSERT INTO ANALYTICS.DIM_ZONE (FLOOR_ID, ZONE_NAME) VALUES
+(1, 'East Zone'),
+(1, 'West Zone');
+
+-- Floor 2: FF-The Pinnacle (FLOOR_ID = 2)
+INSERT INTO ANALYTICS.DIM_ZONE (FLOOR_ID, ZONE_NAME) VALUES
+(2, 'East Zone'),
+(2, 'West Zone');
+
+-- Floor 3: GF-Cityscape (FLOOR_ID = 3)
+INSERT INTO ANALYTICS.DIM_ZONE (FLOOR_ID, ZONE_NAME) VALUES
+(3, 'East Zone'),
+(3, 'West Zone');
+
+-- Floor 4: FF-Cityscape (FLOOR_ID = 4)
+INSERT INTO ANALYTICS.DIM_ZONE (FLOOR_ID, ZONE_NAME) VALUES
+(4, 'East Zone'),
+(4, 'West Zone');
+
+
+select * from dim_zone;
+
+
+INSERT INTO ANALYTICS.DIM_SPACE (ZONE_ID, SPACE_NAME, SPACE_TYPE, CAPACITY)
+VALUES
+-- Meeting Rooms
+(1, 'Meeting Room 101', 'Meeting Room', 8),
+(1, 'Meeting Room 102', 'Meeting Room', 8),
+
+-- Collaboration Area
+(1, 'Collab Area 101', 'Collaboration Area', 6),
+
+-- Cafeteria
+(1, 'Cafeteria 101', 'Cafeteria', 20),
+
+-- Washrooms
+(1, 'Gents Washroom 101', 'Washroom', 4),
+(1, 'Ladies Washroom 101', 'Washroom', 4),
+
+-- Workstations
+(1, 'Workstation 101', 'Workstation', 10);
+INSERT INTO ANALYTICS.DIM_SPACE (ZONE_ID, SPACE_NAME, SPACE_TYPE, CAPACITY)
+VALUES
+-- Meeting Rooms
+(2, 'Meeting Room 201', 'Meeting Room', 8),
+(2, 'Meeting Room 202', 'Meeting Room', 6),
+
+-- Collaboration Area
+(2, 'Collab Area 201', 'Collaboration Area', 6),
+
+-- Workstations
+(2, 'Workstation 201', 'Workstation', 10);
+
+INSERT INTO ANALYTICS.DIM_SPACE (ZONE_ID, SPACE_NAME, SPACE_TYPE, CAPACITY)
+VALUES
+(3, 'Meeting Room 301', 'Meeting Room', 8),
+(3, 'Meeting Room 302', 'Meeting Room', 8),
+(3, 'Collab Area 301', 'Collaboration Area', 6),
+(3, 'Cafeteria 301', 'Cafeteria', 20),
+(3, 'Gents Washroom 301', 'Washroom', 4),
+(3, 'Ladies Washroom 301', 'Washroom', 4),
+(3, 'Workstation 301', 'Workstation', 10);
+
+-- Zone 4: West Zone (ZONE_ID = 4)
+INSERT INTO ANALYTICS.DIM_SPACE (ZONE_ID, SPACE_NAME, SPACE_TYPE, CAPACITY)
+VALUES
+(4, 'Meeting Room 401', 'Meeting Room', 8),
+(4, 'Meeting Room 402', 'Meeting Room', 6),
+(4, 'Collab Area 401', 'Collaboration Area', 6),
+(4, 'Workstation 401', 'Workstation', 10);
+
+INSERT INTO ANALYTICS.DIM_SPACE (ZONE_ID, SPACE_NAME, SPACE_TYPE, CAPACITY)
+VALUES
+(5, 'Meeting Room 501', 'Meeting Room', 8),
+(5, 'Meeting Room 502', 'Meeting Room', 8),
+(5, 'Collab Area 501', 'Collaboration Area', 6),
+(5, 'Cafeteria 501', 'Cafeteria', 20),
+(5, 'Gents Washroom 501', 'Washroom', 4),
+(5, 'Ladies Washroom 501', 'Washroom', 4),
+(5, 'Workstation 501', 'Workstation', 10);
+
+-- Zone 6: West Zone (ZONE_ID = 6)
+INSERT INTO ANALYTICS.DIM_SPACE (ZONE_ID, SPACE_NAME, SPACE_TYPE, CAPACITY)
+VALUES
+(6, 'Meeting Room 601', 'Meeting Room', 8),
+(6, 'Meeting Room 602', 'Meeting Room', 6),
+(6, 'Collab Area 601', 'Collaboration Area', 6),
+(6, 'Workstation 601', 'Workstation', 10);
+
+INSERT INTO ANALYTICS.DIM_SPACE (ZONE_ID, SPACE_NAME, SPACE_TYPE, CAPACITY)
+VALUES
+(7, 'Meeting Room 701', 'Meeting Room', 8),
+(7, 'Meeting Room 702', 'Meeting Room', 8),
+(7, 'Collab Area 701', 'Collaboration Area', 6),
+(7, 'Cafeteria 701', 'Cafeteria', 20),
+(7, 'Gents Washroom 701', 'Washroom', 4),
+(7, 'Ladies Washroom 701', 'Washroom', 4),
+(7, 'Workstation 701', 'Workstation', 10);
+
+-- Zone 8: West Zone (ZONE_ID = 8)
+INSERT INTO ANALYTICS.DIM_SPACE (ZONE_ID, SPACE_NAME, SPACE_TYPE, CAPACITY)
+VALUES
+(8, 'Meeting Room 801', 'Meeting Room', 8),
+(8, 'Meeting Room 802', 'Meeting Room', 6),
+(8, 'Collab Area 801', 'Collaboration Area', 6),
+(8, 'Workstation 801', 'Workstation', 10);
+select * from dim_space;
+
+INSERT INTO ANALYTICS.DIM_SENSOR (SPACE_ID, SENSOR_TYPE, MANUFACTURER)
+VALUES
+(1, 'Multi-KPI Sensor', 'SensTech'),
+(2, 'Multi-KPI Sensor', 'SensTech'),
+(3, 'Multi-KPI Sensor', 'SensTech'),
+(4, 'Multi-KPI Sensor', 'SensTech'),
+(5, 'Multi-KPI Sensor', 'SensTech'),
+(6, 'Multi-KPI Sensor', 'SensTech'),
+(7, 'Multi-KPI Sensor', 'SensTech'),
+(8, 'Multi-KPI Sensor', 'SensTech'),
+(9, 'Multi-KPI Sensor', 'SensTech'),
+(10, 'Multi-KPI Sensor', 'SensTech'),
+(11, 'Multi-KPI Sensor', 'SensTech'),
+(12, 'Multi-KPI Sensor', 'SensTech'),
+(13, 'Multi-KPI Sensor', 'SensTech'),
+(14, 'Multi-KPI Sensor', 'SensTech'),
+(15, 'Multi-KPI Sensor', 'SensTech'),
+(16, 'Multi-KPI Sensor', 'SensTech'),
+(17, 'Multi-KPI Sensor', 'SensTech'),
+(18, 'Multi-KPI Sensor', 'SensTech'),
+(19, 'Multi-KPI Sensor', 'SensTech'),
+(20, 'Multi-KPI Sensor', 'SensTech'),
+(21, 'Multi-KPI Sensor', 'SensTech'),
+(22, 'Multi-KPI Sensor', 'SensTech'),
+(23, 'Multi-KPI Sensor', 'SensTech'),
+(24, 'Multi-KPI Sensor', 'SensTech'),
+(25, 'Multi-KPI Sensor', 'SensTech'),
+(26, 'Multi-KPI Sensor', 'SensTech'),
+(27, 'Multi-KPI Sensor', 'SensTech'),
+(28, 'Multi-KPI Sensor', 'SensTech'),
+(29, 'Multi-KPI Sensor', 'SensTech'),
+(30, 'Multi-KPI Sensor', 'SensTech'),
+(31, 'Multi-KPI Sensor', 'SensTech'),
+(32, 'Multi-KPI Sensor', 'SensTech'),
+(33, 'Multi-KPI Sensor', 'SensTech'),
+(34, 'Multi-KPI Sensor', 'SensTech'),
+(35, 'Multi-KPI Sensor', 'SensTech'),
+(36, 'Multi-KPI Sensor', 'SensTech'),
+(37, 'Multi-KPI Sensor', 'SensTech'),
+(38, 'Multi-KPI Sensor', 'SensTech'),
+(39, 'Multi-KPI Sensor', 'SensTech'),
+(40, 'Multi-KPI Sensor', 'SensTech'),
+(41, 'Multi-KPI Sensor', 'SensTech'),
+(42, 'Multi-KPI Sensor', 'SensTech'),
+(43, 'Multi-KPI Sensor', 'SensTech'),
+(44, 'Multi-KPI Sensor', 'SensTech');
+update dim_sensor set status = 1 where status is NULL;
+select * from dim_sensor;
+
+
+CREATE OR REPLACE TABLE ANALYTICS.FACT_SENSOR_READINGS (
+    READING_ID NUMBER(38,0) AUTOINCREMENT,
+    SENSOR_ID NUMBER(38,0),          -- FK to DIM_SENSOR
+    SPACE_ID NUMBER(38,0),           -- FK to DIM_SPACE
+    READING_TIMESTAMP TIMESTAMP_NTZ(9) DEFAULT CURRENT_TIMESTAMP(),
+    
+    -- KPI columns
+    TEMPERATURE NUMBER(5,2),         -- Celsius
+    HUMIDITY NUMBER(5,2),            -- %
+    CO NUMBER(5,2),                   -- ppm
+    TVOC NUMBER(5,2),                 -- ppb
+    PM10 NUMBER(5,2),                 -- µg/m3
+    AQI NUMBER(5,0),                  -- Index
+    ODOR_LEVEL NUMBER(5,2),           -- Optional, e.g., 0–10 scale
+    
+    PRIMARY KEY (READING_ID)
+);
+
+CREATE OR REPLACE STREAM CURATED.SENSOR_CURATED_STREAM
+ON TABLE CURATED.SENSOR_READINGS_CURATED
+SHOW_INITIAL_ROWS = FALSE;
+
+
+CREATE OR REPLACE TASK ANALYTICS.TASK_FACT_SENSOR_READINGS
+WAREHOUSE = COMPUTE_WH
+SCHEDULE = 'USING CRON 0,5,10,15,20,25,30,35,40,45,50,55 * * * * UTC'  -- every minute
+AS
+INSERT INTO ANALYTICS.FACT_SENSOR_READINGS
+(
+    SENSOR_ID,
+    SPACE_ID,
+    READING_TIMESTAMP,
+    TEMPERATURE,
+    HUMIDITY,
+    CO,
+    TVOC,
+    PM10,
+    AQI,
+    ODOR_LEVEL
+)
+SELECT
+    c.SENSOR_ID,
+    s.SPACE_ID,
+    MAX(c.READING_TIMESTAMP) AS READING_TIMESTAMP,
+
+    MAX(CASE WHEN c.METRIC_NAME = 'temperature' THEN c.METRIC_VALUE END) AS TEMPERATURE,
+    MAX(CASE WHEN c.METRIC_NAME = 'humidity' THEN c.METRIC_VALUE END)    AS HUMIDITY,
+    MAX(CASE WHEN c.METRIC_NAME = 'CO' THEN c.METRIC_VALUE END)          AS CO,
+    MAX(CASE WHEN c.METRIC_NAME = 'TVOC' THEN c.METRIC_VALUE END)        AS TVOC,
+    MAX(CASE WHEN c.METRIC_NAME = 'PM10' THEN c.METRIC_VALUE END)        AS PM10,
+    MAX(CASE WHEN c.METRIC_NAME = 'AQI' THEN c.METRIC_VALUE END)         AS AQI,
+    MAX(CASE WHEN c.METRIC_NAME = 'Odor' THEN c.METRIC_VALUE END)        AS ODOR_LEVEL
+FROM CURATED.SENSOR_CURATED_STREAM c
+JOIN ANALYTICS.DIM_SENSOR s
+    ON c.SENSOR_ID = s.SENSOR_ID
+GROUP BY
+    c.SENSOR_ID,
+    s.SPACE_ID;
+
+
+SELECT CURRENT_ACCOUNT(), CURRENT_REGION();
+select * from SENSOR_EVENTS_RAW;
+
+DROP STREAM IF EXISTS RAW.SENSOR_EVENT_STREAM;
+CREATE OR REPLACE STREAM RAW.SENSOR_EVENT_STREAM
+ON TABLE RAW.SENSOR_EVENTS_RAW
+SHOW_INITIAL_ROWS = FALSE;
+
+
+
+ALTER TASK CURATED.CURATE_ALL_KPIS_TASK RESUME;
+
+
+SELECT COUNT(*) FROM RAW.SENSOR_EVENTS_RAW;
+SELECT *
+FROM CURATED.SENSOR_READINGS_CURATED
+ORDER BY READING_TIMESTAMP DESC
+LIMIT 88;
+
+
+ALTER TASK CURATED.CURATE_ALL_KPIS_TASK RESUME;
+EXECUTE TASK CURATED.CURATE_ALL_KPIS_TASK;
+SELECT COUNT(*) FROM RAW.SENSOR_EVENT_STREAM;
+
+SHOW TASKS LIKE '%CURATE%';
+
+SELECT *
+FROM TABLE(INFORMATION_SCHEMA.TASK_HISTORY())
+WHERE NAME = 'CURATE_ALL_KPIS_TASK'
+ORDER BY SCHEDULED_TIME DESC;
+
+SHOW TASKS IN SCHEMA CURATED;
+
+
+CREATE STREAM RAW.SENSOR_EVENTS_STREAM
+ON TABLE RAW.SENSOR_EVENTS_RAW
+SHOW_INITIAL_ROWS = FALSE;
+
+
+EXECUTE TASK CURATED.CURATE_ALL_KPIS_TASK;
+
+
+SELECT COUNT(*) FROM RAW.SENSOR_EVENTS_STREAM;
+
+
+SELECT COUNT(*) 
+FROM CURATED.SENSOR_READINGS_CURATED;
+
+SELECT COUNT(*) FROM RAW.SENSOR_EVENTS_STREAM;
+
+
+select count(*) from sensor_readings_curated;
+select * from fact_sensor_readings;
+
+INSERT INTO IOT_ANALYTICS_DB.ANALYTICS.FACT_SENSOR_READINGS (
+    SENSOR_ID,
+    SPACE_ID,
+    READING_TIMESTAMP,
+    TEMPERATURE,
+    HUMIDITY,
+    CO,
+    TVOC,
+    PM10,
+    AQI,
+    ODOR_LEVEL
+)
+SELECT
+    c.sensor_id,
+    d.space_id,
+    c.reading_timestamp,
+    MAX(CASE WHEN c.metric_name = 'temperature' THEN c.metric_value END) AS temperature,
+    MAX(CASE WHEN c.metric_name = 'humidity' THEN c.metric_value END) AS humidity,
+    MAX(CASE WHEN c.metric_name = 'CO' THEN c.metric_value END) AS co,
+    MAX(CASE WHEN c.metric_name = 'TVOC' THEN c.metric_value END) AS tvoc,
+    MAX(CASE WHEN c.metric_name = 'PM10' THEN c.metric_value END) AS pm10,
+    MAX(CASE WHEN c.metric_name = 'AQI' THEN c.metric_value END) AS aqi,
+    MAX(CASE WHEN c.metric_name = 'Odor' THEN c.metric_value END) AS odor_level
+FROM IOT_ANALYTICS_DB.CURATED.SENSOR_READINGS_CURATED c
+JOIN IOT_ANALYTICS_DB.ANALYTICS.DIM_SENSOR d
+    ON c.sensor_id = d.sensor_id
+GROUP BY c.sensor_id, d.space_id, c.reading_timestamp;
+
+select count(*) from fact_sensor_readings;
+
+
+CREATE OR REPLACE TASK IOT_ANALYTICS_DB.ANALYTICS.CURATE_TO_FACT_TASK
+WAREHOUSE = COMPUTE_WH
+SCHEDULE = 'USING CRON 0,5,10,15,20,25,30,35,40,45,50,55 * * * * UTC'  -- every 5 mins
+COMMENT = 'Populate FACT_SENSOR_READINGS from curated sensor stream'
+AS
+INSERT INTO IOT_ANALYTICS_DB.ANALYTICS.FACT_SENSOR_READINGS (
+    SENSOR_ID,
+    SPACE_ID,
+    READING_TIMESTAMP,
+    TEMPERATURE,
+    HUMIDITY,
+    CO,
+    TVOC,
+    PM10,
+    AQI,
+    ODOR_LEVEL
+)
+SELECT
+    c.sensor_id,
+    d.space_id,
+    c.reading_timestamp,
+    MAX(CASE WHEN c.metric_name = 'temperature' THEN c.metric_value END) AS temperature,
+    MAX(CASE WHEN c.metric_name = 'humidity' THEN c.metric_value END) AS humidity,
+    MAX(CASE WHEN c.metric_name = 'CO' THEN c.metric_value END) AS co,
+    MAX(CASE WHEN c.metric_name = 'TVOC' THEN c.metric_value END) AS tvoc,
+    MAX(CASE WHEN c.metric_name = 'PM10' THEN c.metric_value END) AS pm10,
+    MAX(CASE WHEN c.metric_name = 'AQI' THEN c.metric_value END) AS aqi,
+    MAX(CASE WHEN c.metric_name = 'Odor' THEN c.metric_value END) AS odor_level
+FROM IOT_ANALYTICS_DB.CURATED.SENSOR_CURATED_STREAM c
+JOIN IOT_ANALYTICS_DB.ANALYTICS.DIM_SENSOR d
+    ON c.sensor_id = d.sensor_id
+GROUP BY c.sensor_id, d.space_id, c.reading_timestamp;
+
+ALTER TASK IOT_ANALYTICS_DB.ANALYTICS.CURATE_TO_FACT_TASK RESUME;
+
+SELECT *
+FROM TABLE(INFORMATION_SCHEMA.TASK_HISTORY())
+WHERE NAME = 'CURATE_TO_FACT_TASK'
+ORDER BY SCHEDULED_TIME DESC;
+select * from fact_sensor_readings;
+    
